@@ -60,23 +60,24 @@ class Net(nn.Module):
     def forward(self, x):        
         mu, logvar = self.encode(x)
         z = self.reparam(mu, logvar)
-        return self.decode(z), mu, logvar
-        
-    def num_flat_features(self, x):
+        return self.decode(z), mu, logvar        
+
+
+def num_flat_features(x):
         size = x.size()[1:]  # all dimensions except the batch dimension
         num_features = 1
         for s in size:
             num_features *= s
         return num_features
-
+        
+       
 def loss_function(recon_x, x, mu, logvar):
     # reconstruction error
-    recon_error = F.binary_cross_entropy(recon_x, x.view(-1, 784))
-    # kl divergence
-    kld_error = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    kld_error /= 64 * 784 # SHOULD CHANGE 64 TO x.size()[0] TO REPRESENT BATCH_SIZE
+    recon_error = F.binary_cross_entropy(recon_x, x.view(-1, 784))   
+    # KL Divergence
+    
     # return sum of reconstruction error and kl divergence
-    return recon_error + kld_error
+    return recon_error + entropy - cross_entropy
     
 
 
