@@ -13,11 +13,12 @@ NUM_EPOCHS = 5
 
 class Net(nn.Module):
     def __init__(self):
+        super(Net, self).__init__()
+        
         # pseudoinput layer
         self.ps_layer = nn.Linear(NUM_PSEUDOINPUTS, 784)
         
-        # encoder layers
-        super(Net, self).__init__()       
+        # encoder layers  
         self.conv1 = nn.Conv2d(1, 3, 3)
         self.conv2 = nn.Conv2d(3, 6, 3)
         self.fc1 = nn.Linear(150, 84)
@@ -29,22 +30,23 @@ class Net(nn.Module):
         self.fc4 = nn.Linear(2, 400)
         self.fc5 = nn.Linear(400, 784)
         # USE TRANSPOSE CONV. LAYERS INSTEAD??
-        self.sig = nn.Sigmoid()
         
     def get_ps(self):
         i = torch.eye(NUM_PSEUDOINPUTS)
-        ps = nn.Sigmoid(self.ps_layer(i))
-        return ps
+        ps = F.sigmoid(self.ps_layer(i))
+        return ps.view(NUM_PSEUDOINPUTS, 1, 28, 28)
     
     def encode(self, x):        
         # moves through encoding layers
-        x = F.max_pool2d(nn.Sigmoid(self.conv1(x)), 2) # makes it [3, 13, 13]
-        x = F.max_pool2d(nn.Sigmoid(self.conv2(x)), 2) # makes it [6, 5, 5]
-        x = x.view(-1, self.num_flat_features(x)) # makes it [150]
-        x = nn.Sigmoid(self.fc1(x)) # makes it [84]
-        x = nn.Sigmoid(self.fc2(x)) # makes it [10]
-        mu = nn.Sigmoid(self.fc_mu(x)) # makes it [2]
-        logvar = nn.Sigmoid(self.fc_logvar(x)) # makes it [2]        
+        x = F.sigmoid(self.conv1(x))
+        x = F.max_pool2d(x, kernel_size=2) # makes it [3, 13, 13]
+        x = F.sigmoid(self.conv2(x))
+        x = F.max_pool2d(x, kernel_size=2) # makes it [6, 5, 5]
+        x = x.view(-1, num_flat_features(x)) # makes it [150]
+        x = F.sigmoid(self.fc1(x)) # makes it [84]
+        x = F.sigmoid(self.fc2(x)) # makes it [10]
+        mu = F.sigmoid(self.fc_mu(x)) # makes it [2]
+        logvar = F.sigmoid(self.fc_logvar(x)) # makes it [2]        
         # returns mu and logvar
         return mu, logvar
         
@@ -57,25 +59,14 @@ class Net(nn.Module):
             return mu
      
     def decode(self, z):
-        x = F.relu(self.fc4(z)) # makes it [400]
-        x = F.relu(self.fc5(x)) # makes it [400]
-        return self.sig(x)
+        x = F.leaky_relu(self.fc4(z)) # makes it [400]
+        x = F.leaky_relu(self.fc5(x)) # makes it [400]
+        return F.sigmoid(x)
     
     def forward(self, x):        
         mu, logvar = self.encode(x)
         z = self.reparam(mu, logvar)
         return self.decode(z), mu, logvar        
-
-
-    def num_flat_features(self, x):
-            size = x.size()[1:]  # all dimensions except the batch dimension
-            num_features = 1
-            for s in size:
-                num_features *= s
-            return num_features
-
-    def diagonal_normal_logpdf(self, x, mu, logvar):
-        return -0.5 * (logvar + torch.pow(x - mu, 2) / torch.exp(logvar))
 
     def loss_function(self, recon_x, x, mu, logvar):
         # reconstruction error
@@ -87,21 +78,38 @@ class Net(nn.Module):
         z_sample = mu + eps * std_dev
         logpdf_posterior = diagonal_normal_logpdf(z_sample, mu, logvar)
         
-        pseudoinputs = get_ps()
-        ps_mu, ps_logvar = encode(pseudoinputs)
-        logpdf_prior = diagonal_normal_logpdf(z_sample, mu, logvar)
+        pseudoinputs = self.get_ps()
+        ps_mu, ps_logvar = self.encode(pseudoinputs)
+        z_sample = z_sample.view(-1, 1, 2)
+        z_sample = z_sample.repeat(1, NUM_PSEUDOINPUTS, 1)
+        ps_mu = ps_mu.repeat(z_sample.size()[0], 1, 1)
+        ps_logvar = ps_logvar.repeat(z_sample.size()[0], 1, 1)
+        logpdf_prior = diagonal_normal_logpdf(z_sample, ps_mu, ps_logvar)
+        logpdf_prior = logpdf_prior.mean(1)
         
-        kldiv_loss = logpdf_posterior - logpdf_prior
+        kldiv_loss = torch.mean(logpdf_posterior - logpdf_prior)
         
         # return sum of reconstruction error and kl divergence
+        if not self.training:
+            print('Reconstruction Loss: {}, KL Divergence Loss {}'.format(recon_error.item(), kldiv_loss.item()))
         return recon_error + kldiv_loss
+
+def diagonal_normal_logpdf(x, mu, logvar):
+    return -0.5 * (logvar + torch.pow(x - mu, 2) / torch.exp(logvar))
+        
+def num_flat_features(x):
+        size = x.size()[1:]  # all dimensions except the batch dimension
+        num_features = 1
+        for s in size:
+            num_features *= s
+        return num_features
 
 def train(model, train_loader, optimizer, epoch):
     model.train()
     for batch_id, (data, target) in enumerate(train_loader):
         recon_batch, mu, logvar = model(data)
         optimizer.zero_grad()
-        loss = loss_function(recon_batch, data, mu, logvar)
+        loss = model.loss_function(recon_batch, data, mu, logvar)
         loss.backward()
         optimizer.step()
         if batch_id % 10 == 0:
@@ -120,7 +128,7 @@ def test(model, test_loader):
     with torch.no_grad():
         for data, target in test_loader:
             output, mu, logvar = model(data)
-            test_loss += loss_function(output, data, mu, logvar).item()
+            test_loss += model.loss_function(output, data, mu, logvar).item()
     test_loss /= len(test_loader.dataset)
     print('\nTest set: Average loss: {:.4f}'.format(test_loss))
 
